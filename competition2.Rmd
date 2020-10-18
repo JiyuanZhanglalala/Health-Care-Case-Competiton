@@ -1,0 +1,156 @@
+---
+title: "holdoutdata"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+HOLDOUT要保留每一个id
+
+
+```{r}
+length(unique(HOLDOUT$ID))
+#4287
+length(unique(HOLDOUTRxPaidonly$id))
+#4287
+
+HOLDOUT<-read.csv("HMAHCC_HOLDOUT.csv")
+HOLDOUT<-HOLDOUT[HOLDOUT$EVENT_DESCR == "RX Claim - Paid",]
+
+HOLDOUTRxPaidonly<-HOLDOUT[,-c(which(names(HOLDOUT)=="EVENT_ATTR2"),which(names(HOLDOUT)=="EVENT_ATTR7"))]
+names(HOLDOUTRxPaidonly)<-c("id",
+"event_descr",
+"GPI Drug Class Description",
+"Rx Cost",
+"Net Paid Amount",
+"Brand Name",
+"Drug Group Description",
+"Generic Name",
+"Member Responsible Amount",
+"GPI Drug Group8 ID",
+"PAY_DAY_SUPPLY_CNT",
+"PAYABLE_QTY",
+"MME",
+"DRUG_TYPE",
+"Specialty",
+"Specialty2",
+"Specialty3",
+"Days")
+### remove the att 2 and att 7, becasue those are empty 
+library(sqldf)
+HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly<-sqldf("select * from HOLDOUTRxPaidonly where GPI Drug Class Description like  'OPIOID%'" )
+```
+
+```{r}
+
+#HOLDOUTdaysbetween0and180<-HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly[HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly$Days>=0&HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly$Days <=180, ]
+
+#HOLDOUTuniqueid<-unique(HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly$id[HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly$Days>=0&HOLDOUTRxPaidonlyRxPaidonlywithOPIOIDonly$Days <=180 ]  )
+#length(HOLDOUTuniqueid)  
+## holdout 不需要决定LTOT 现在
+
+
+```
+
+```{r}
+HOLDOUTnumber_of_OPIOID_of_each_id_before_day_1<-sqldf("select id, count(*) as number_of_OPIOID from HOLDOUTRxPaidonly where `GPI Drug Class Description` like  'OPIOID%' and Days<=0 group by id ")
+length(HOLDOUTnumber_of_OPIOID_of_each_id_before_day_1$id)  ## 只有4283， 比所有的少4个
+
+
+
+```
+```{r}
+
+HOLDOUTcount_Drug_group_max<-sqldf("select id,`Drug Group Description`, count(*)as cnt from HOLDOUTRxPaidonly where Days<=0 group by id,`Drug Group Description` order by id, count(*) desc")
+#same as last, by the count(*) was 排序了
+length(unique(HOLDOUTcount_Drug_group_max$id)) #4287
+
+which(HOLDOUTcount_Drug_group_max$id== 'ID98975196852')
+
+
+HOLDOUTtop1_drug_group_of_each_id<-sqldf(" select id,`Drug Group Description`,max(cnt) from HOLDOUTcount_Drug_group_max group by id ")
+HOLDOUTtop1_drug_group_of_each_id<-HOLDOUTtop1_drug_group_of_each_id[,-3]
+length(HOLDOUTtop1_drug_group_of_each_id$id)
+
+#4287 rows
+
+```
+
+```{r}
+HOLDOUTnumber_of_Pain_before_day_1<-sqldf("select id,`Drug Group Description`, count(*) as count_of_pain from HOLDOUTRxPaidonly where Days<=0 and `Drug Group Description`='PAIN' group by id,`Drug Group Description`" )
+#在day0之前，每个人收到的pain 的数量是多少
+
+length(HOLDOUTnumber_of_Pain_before_day_1$id)
+#4284rows
+```
+
+```{r}
+HOLDOUTAverage_MME<-sqldf("select id,avg(MME) as average_MME from HOLDOUTRxPaidonly  where  Days<=0 and MME is not NULL group by id")
+#4272ROWS
+```
+```{r}
+AAA<-sqldf("select id, count(*) as number_of_IR  from HOLDOUTRxPaidonly where Days<=0 and DRUG_TYPE='IR' group by id, DRUG_TYPE")
+#number of IR of each id
+BBB<-sqldf("select id, count(*) as number_of_ER   from HOLDOUTRxPaidonly where Days<=0 and DRUG_TYPE='ER' group by id, DRUG_TYPE")
+#number of ER of each id
+
+EEE<-sqldf("select AAA.id,number_of_IR, number_of_ER  from AAA left join BBB on AAA.id=BBB.id")
+EEE$number_of_ER[is.na(EEE$number_of_ER)]<-0
+
+HOLDOUTnumber_of_IR_ER<-EEE
+length(HOLDOUTnumber_of_IR_ER$id)
+#4248 rows
+```
+
+```{r}
+CCC<-sqldf("select id,Specialty,count(*) as count_of_specialty from HOLDOUTRxPaidonly where Days<=0 and `GPI Drug Class Description` like  'OPIOID%' group by id, Specialty order by id,count_of_specialty desc ")
+#加上了order by
+
+DDD<-sqldf("select id,Specialty,max(count_of_specialty) from CCC group by id")
+HOLDOUTTop1_of_Specialty<-sqldf("select id,Specialty from DDD")
+length(HOLDOUTTop1_of_Specialty$id)
+#4283
+```
+
+```{r}
+HOLDOUTtop1_drug_group_of_each_id  
+#4287 rows
+#HOLDOUTnumber_of_Pain_before_day_1<-HOLDOUTnumber_of_Pain_before_day_1[,-2]
+#4284rows
+HOLDOUTnumber_of_OPIOID_of_each_id_before_day_1  ## 只有4283， 比所有的少4个
+HOLDOUTTop1_of_Specialty                      #4283
+HOLDOUTAverage_MME                            #4272ROWS
+HOLDOUTnumber_of_IR_ER                        #4248 rows
+
+AAAA<-sqldf("select A.id, `Drug Group Description`,count_of_pain   from HOLDOUTtop1_drug_group_of_each_id A left join HOLDOUTnumber_of_Pain_before_day_1 B on A.id=B.id")
+nrow(AAAA)
+BBBB<-sqldf("select A.id, `Drug Group Description`,count_of_pain,number_of_OPIOID from AAAA A left join HOLDOUTnumber_of_OPIOID_of_each_id_before_day_1 B on A.id=B.id")
+CCCC<-sqldf("select A.id, `Drug Group Description`,count_of_pain,number_of_OPIOID,Specialty from BBBB A left join HOLDOUTTop1_of_Specialty B on A.id=B.id")
+DDDD<-sqldf("select A.id, `Drug Group Description`,count_of_pain,number_of_OPIOID,Specialty,average_MME
+ from CCCC A left join HOLDOUTAverage_MME  B on A.id=B.id")
+EEEE<-sqldf("select A.id, `Drug Group Description`,count_of_pain,number_of_OPIOID,Specialty,average_MME,number_of_IR,number_of_ER
+from DDDD A left join HOLDOUTnumber_of_IR_ER  B on A.id=B.id")
+EEEE$LTOT<-NA
+
+EEEE[is.na(EEEE$`Drug Group Description`),]
+EEEE[is.na(EEEE$count_of_pain),]$count_of_pain<-0
+EEEE[is.na(EEEE$number_of_OPIOID),]$number_of_OPIOID<-0
+EEEE[is.na(EEEE$Specialty),]$specialty
+EEEE[is.na(EEEE$average_MME),]$average_MME<-0
+EEEE[is.na(EEEE$number_of_IR),]$number_of_IR<-0
+EEEE[is.na(EEEE$number_of_ER),]$number_of_ER<-0
+```
+
+```{r}
+#for combine
+Finalwithoutlog<-Final[,c(-4,-7,-9,-12)]
+
+
+newFinal<-rbind(Finalwithoutlog,EEEE)
+
+
+```
+
+

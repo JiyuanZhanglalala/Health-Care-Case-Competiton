@@ -1,0 +1,456 @@
+---
+title: "Competition1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(regclass)
+library(multcompView)
+library(arules)
+library(discretization)
+library(caret)
+library(regclass)
+library(parallel)
+library(doParallel)
+install.packages('multcompView')
+install.packages('discretization')
+install.packages('arules')
+install.packages('caret')
+install.packages('parallel')
+install.packages('doParallel')
+
+propose_levelsS19 <- function(DATA,method="none",threshold=0,newname="Combined",target=4,train.rows=NA,seed=NA) {
+  
+  if( length(train.rows)>1 ) { 
+    if( mean(complete.cases(DATA[train.rows,])) < 1 ) { stop("The train.rows of DATA cannot contain any missing values")} 
+  } else {
+  
+  if( mean(complete.cases(DATA)) < 1 ) { stop("Object cannot contain any missing values")} }
+
+  require(discretization)
+
+  #First combine any rare levels if requested if threshold > 0
+  if(threshold == 0 | is.na(threshold)) { invisible("Not doing anything") } else { 
+    x <- c()
+    if(class(DATA) %in% c("character","factor") ) {  x <- factor(DATA) }
+    if(class(DATA) %in% c("matrix","data.frame") ) {
+      if( class(DATA[,1]) %in% c("character","factor")) { x <- factor(DATA[,1]) } }
+    if(class(x) == "factor") {
+      rare.levels <- names( which( sort( table(x) ) <= threshold ) )
+      if(length(rare.levels)>0) { 
+        levels(x)[ which(levels(x) %in% rare.levels) ] <- newname
+        ST <- sort(table(x))
+        if(ST[newname]<=threshold) {  #If combined is still rare, combine that with next most rare level
+          levels.to.combine <- which( levels(x) %in% c(newname,names(ST)[2]))
+          levels(x)[levels.to.combine] <- newname
+          rare.levels <- c(rare.levels,names(ST)[2]) }
+      }
+      if(class(DATA) %in% c("character","factor") ) {  DATA <- x }
+      if(class(DATA) %in% c("matrix","data.frame") ) { DATA[,1] <- x } }
+    if( class(x) == "NULL" ) { stop("Cannot combine rare levels of x unless is a categorical variables")}
+  }
+  
+  #If didn't request discretization, we're done
+  if(method=="none") { return(factor(x)) }
+  
+  #Handle case where unsupervised discretization is taking place (DATA MUST BE a numerical VECTOR)
+  if( class(DATA) %in% c("numeric","integer") & method %in% c("interval","frequency","cluster") ) {
+    if( class(DATA) %in% c("numeric","integer") ) { 
+      old.values <- DATA
+      if( !is.na(seed) ) { set.seed(seed) }  #Set random number seed if seed was passed as argument
+      x.cluster <- factor( discretize(DATA,method=method,breaks=target ) )
+      return(factor(x.cluster))
+    } }
+  
+  #Now do supervised discretization cases; now need to worry whether to do it to whole data or just training
+  #HALFDISC is be name of dataframe where discretization is derived from here on out
+  
+  if(class(DATA)=="matrix") { DATA <- as.data.frame(DATA) }
+  if( !(class(DATA)=="data.frame") ) { stop("Supervised discretization requires dataframe with 1st column x 2nd column y")}
+  if( ncol(DATA) != 2 ) { stop("Supervised discretization requires dataframe with 1st column x 2nd column y") }
+  
+  #x (1st column) should be levels to combine; y (2nd column) should be what you're using to suggest levels
+  
+  names(DATA) <- c("x","y")
+  DATA$rownumber <- 1:nrow(DATA)
+  #If a vector of training rows is given, make sure to respect that; discretization scheme should be developed on training
+  if( length(train.rows)>1 ) { HALFDISC <- DATA[train.rows,] } else { HALFDISC <- DATA }
+ 
+  ###################################################################################################################
+  #Case of numerical x and numerical y; mdlp or tree recommended 
+  ###################################################################################################################
+  
+  #Supervised x=numerical; y=numerical
+  #data(WINE)
+  #DATA <- WINE[,c("alcohol","density")]
+  #target <- 4; train.rows <- sample(nrow(DATA),0.5*nrow(DATA))
+  #names(DATA) <- c("x","y")
+  #DATA$rownumber <- 1:nrow(DATA)
+  #if( length(train.rows)>1 ) { HALFDISC <- DATA[train.rows,] } else { HALFDISC <- DATA }
+  
+  if( (class(HALFDISC$x) %in% c("numeric","integer","logical")) & class(HALFDISC$y) %in% c("numeric","integer","logical") ) {
+    
+    if(method=="tree") { 
+      TREE <- rpart(y~x,data=HALFDISC,cp=0)
+      T2 <- prune(TREE,cp=TREE$cptable[max( which(TREE$cptable[,2] <= (target-1) ) ),1] )
+      D <- data.frame(fitted=sort(unique(predict(T2))),newlevel=paste("new",target:1,sep=""))
+      MERGED <- DATA
+      MERGED$fitted <- predict(T2,newdata=DATA)
+      MERGED <- merge(MERGED,D,by="fitted")
+      MERGED <- MERGED[order(MERGED$rownumber),]
+    }
+    
+    if (method == "mdlp" ) {
+      disc.scheme <- mdlp(HALFDISC[,c("x","y")])
+      cutoffs <- sort( unlist( disc.scheme$cutp ) )
+      if(cutoffs[1] != "All" ) { thresholds <- c(min(HALFDISC$x), cutoffs, max(HALFDISC$x))  } else { 
+        thresholds <- c(-Inf,Inf)
+      }
+      MERGED <- DATA
+      MERGED$newlevel <- factor(paste("new",pmin(pmax(sapply(DATA$x,function(x)sum(x>=thresholds)),1),length(thresholds)-1),sep=""))
+    }
+    
+    if( method %in% c("interval","frequency","cluster") ) {
+      A <- aggregate(y~x,data=HALFDISC,FUN=median)
+      HALFDISC <- merge(HALFDISC,A,by="x")
+      if( !is.na(seed) ) { set.seed(seed) }  #Set random number seed if seed was passed as argument
+      thresholds <- discretize(HALFDISC$y.y,method=method,breaks=target,onlycuts = TRUE)
+      HALFDISC$newlevel <- factor(paste("new",pmin(pmax(sapply(HALFDISC$y.y,function(x)sum(x>=thresholds)),1),length(thresholds)-1),sep=""))
+      HALFDISC <- HALFDISC[,c("x","newlevel")]
+      HALFDISC <- HALFDISC[!duplicated(HALFDISC),]
+      MERGED <- merge(DATA,HALFDISC,by="x",all.x=TRUE)
+      to.do <- which(is.na(MERGED$newlevel))
+      if(length(to.do)>0) { 
+        for ( n in to.do ) {
+          MERGED$newlevel[n] <- HALFDISC$newlevel[ which.min( abs( MERGED$x[n] - HALFDISC$x ) ) ]
+        } }
+    } 
+    
+    MERGED <- MERGED[order(MERGED$rownumber),]
+    return(factor(MERGED$newlevel))
+  }
+  
+  
+  
+  ###################################################################################################################
+  #Case of numerical x and categorical y; mdlp or tree recommended 
+  ###################################################################################################################
+  
+  #Supervised x=numerical; y=categorical
+  #data(WINE)
+  #DATA <- WINE[,c("alcohol","Quality")]
+  #target <- 4; train.rows <- sample(nrow(DATA),0.5*nrow(DATA))
+  #names(DATA) <- c("x","y")
+  #DATA$rownumber <- 1:nrow(DATA)
+  #if( length(train.rows)>1 ) { HALFDISC <- DATA[train.rows,] } else { HALFDISC <- DATA }
+  
+  
+  if( (class(HALFDISC$x) %in% c("numeric","integer","logical")) & class(HALFDISC$y) %in% c("character","factor") ) {
+    if( method=="tree" ) { 
+      TREE <- rpart(y~x,data=HALFDISC,cp=0)
+      T2 <- prune(TREE,cp=TREE$cptable[max( which(TREE$cptable[,2] <= (target-1) ) ),1] )
+      MERGED <- DATA
+      MERGED$newlevel <- as.numeric( factor( predict(T2,newdata=DATA)[,2] ) )
+      MERGED$newlevel <- max(MERGED$newlevel)-MERGED$newlevel+1
+      MERGED$newlevel <- factor(paste("new",MERGED$newlevel,sep=""))
+    }
+    if( method=="mdlp" ) {
+      disc.scheme <- mdlp(HALFDISC[,c("x","y")])
+      cutoffs <- sort( unlist( disc.scheme$cutp ) )
+      if(cutoffs[1] != "All" ) { thresholds <- c(min(HALFDISC$x), cutoffs, max(HALFDISC$x))  } else { 
+        thresholds <- c(-Inf,Inf) }
+      MERGED <- DATA
+      MERGED$newlevel <- factor(paste("new",pmin(pmax(sapply(DATA$x,function(x)sum(x>=thresholds)),1),length(thresholds)-1),sep=""))
+    }
+    if( method %in% c("interval","frequency","cluster") ) {
+      A <- aggregate(y~x,data=HALFDISC,FUN=function(x)mean(x==levels(HALFDISC$y)[1]))
+      HALFDISC <- merge(HALFDISC,A,by="x")
+      if( !is.na(seed) ) { set.seed(seed) }  #Set random number seed if seed was passed as argument
+      thresholds <- discretize(HALFDISC$y.y,method=method,breaks=target,onlycuts = TRUE)
+      HALFDISC$newlevel <- factor(paste("new",pmin(pmax(sapply(HALFDISC$y.y,function(x)sum(x>=thresholds)),1),length(thresholds)-1),sep=""))
+      HALFDISC <- HALFDISC[,c("x","newlevel")]
+      HALFDISC <- HALFDISC[!duplicated(HALFDISC),]
+      MERGED <- merge(DATA,HALFDISC,by="x",all.x=TRUE)
+      to.do <- which(is.na(MERGED$newlevel))
+      if(length(to.do)>0) { 
+      for ( n in to.do ) {
+        MERGED$newlevel[n] <- HALFDISC$newlevel[ which.min( abs( MERGED$x[n] - HALFDISC$x ) ) ]
+      } }
+    }
+     MERGED <- MERGED[order(MERGED$rownumber),]
+    return(factor(MERGED$newlevel))
+  }
+  
+  
+  
+  ###################################################################################################################
+  #Case of categorical x and categorical y (replace levels by proportions of y, combine levels; mdlp not recommended
+  ###################################################################################################################
+  
+  
+  #Supervised  x=categorical; y=categorical
+  #DATA <- EX6.CLICK[,c("DeviceModel","Click")]; target <- 4; train.rows <- sample(nrow(DATA),0.5*nrow(DATA))
+  #names(DATA) <- c("x","y")
+  #DATA$rownumber <- 1:nrow(DATA)
+  #if( length(train.rows)>1 ) { HALFDISC <- DATA[train.rows,] } else { HALFDISC <- DATA }
+  
+  
+  if( sum( c(class(HALFDISC$y),class(HALFDISC$x)) %in% c("character","factor")) == 2 ) {
+  #Add a column to HALFDISC (will be called y.y) that contains the proportion 
+  A <- aggregate(y~x,data=HALFDISC,FUN=function(x)mean(x==levels(HALFDISC$y)[1]))
+  HALFDISC <- merge(HALFDISC,A,by="x")
+  
+  #x are levels you want to combine, y.y is numerical and will be used in combining
+  
+  if(method=="tree") { 
+    TREE <- rpart(y.y~x,data=HALFDISC,cp=0)
+    T2 <- prune(TREE,cp=TREE$cptable[max( which(TREE$cptable[,2] <= (target-1) ) ),1] )
+    MERGED <- DATA
+    MERGED$newlevel <- as.numeric( factor( predict(T2,newdata=DATA) ) )
+    MERGED$newlevel <- max(MERGED$newlevel)-MERGED$newlevel+1
+    MERGED$newlevel <- factor(paste("new",MERGED$newlevel,sep=""))
+  }
+  if( method %in% c("interval","frequency","cluster") ) {
+    if( !is.na(seed) ) { set.seed(seed) }  #Set random number seed if seed was passed as argument
+    thresholds <- discretize(HALFDISC$y.y,method=method,breaks=target,onlycuts = TRUE)
+  } 
+  if (method == "mdlp" ) {
+    disc.scheme <- mdlp(HALFDISC[,c("y.y","x")])
+    cutoffs <- sort( unlist( disc.scheme$cutp ) )
+    if(cutoffs[1] != "All" ) { thresholds <- c(min(HALFDISC$y.y), cutoffs, max(HALFDISC$y.y) )  } else { 
+      thresholds <- c(-Inf,Inf) }
+  }
+  if( method %in% c("mdlp","interval","frequency","cluster") ) { 
+    A$newlevel <- paste("new",pmin(pmax(sapply(A$y,function(x)sum(x>=thresholds)),1),length(thresholds)-1),sep="")
+    MERGED <- merge(DATA,A,by="x")
+  }
+  MERGED <- MERGED[order(MERGED$rownumber),]
+  return(factor(MERGED$newlevel))
+  }
+  
+  ############################################################################################
+  #Case of numerical y and categorical x (mdlp not recommended)
+  ############################################################################################
+  
+  
+  
+  #Supervised  x=categorical; y=numerical
+  #data(DONOR)
+  #DATA <- DONOR[,c("URBANICITY","MEDIAN_HOME_VALUE")]
+  #DATA <- DATA[complete.cases(DATA),]
+  #target <- 3; train.rows <- sample(nrow(DATA),0.5*nrow(DATA))
+  #names(DATA) <- c("x","y")
+  #DATA$rownumber <- 1:nrow(DATA)
+  #if( length(train.rows)>1 ) { HALFDISC <- DATA[train.rows,] } else { HALFDISC <- DATA }
+  
+  if( (class(HALFDISC$x) %in% c("character","factor")) & class(HALFDISC$y) %in% c("numeric","integer","logical") ) {
+  A <- aggregate(y~x,data=HALFDISC,FUN=median)
+  HALFDISC <- merge(HALFDISC,A,by="x")
+  
+  #Tree approach for combining levels based on numerical y
+  if(method=="tree") { 
+    TREE <- rpart(y.x~x,data=HALFDISC,cp=0)
+    T2 <- prune(TREE,cp=TREE$cptable[max( which(TREE$cptable[,2] <= (target-1) ) ),1] )
+    D <- data.frame(fitted=sort(unique(predict(T2))),newlevel=paste("new",1:target,sep=""))
+    MERGED <- DATA
+    MERGED$fitted <- predict(T2,newdata=DATA)
+    MERGED <- merge(MERGED,D,by="fitted")
+    MERGED <- MERGED[order(MERGED$rownumber),]
+  }
+
+  if( method %in% c("interval","frequency","cluster") ) {
+      if( !is.na(seed) ) { set.seed(seed) }  #Set random number seed if seed was passed as argument
+      thresholds <- discretize(HALFDISC$y.y,method=method,breaks=target,onlycuts = TRUE)
+  } 
+  if (method == "mdlp" ) {
+    disc.scheme <- mdlp(HALFDISC[,c("y.y","x")])
+    cutoffs <- sort( unlist( disc.scheme$cutp ) )
+    if(cutoffs[1] != "All" ) { thresholds <- c(min(HALFDISC$y.y), cutoffs, max(HALFDISC$y.y) )  } else { 
+      thresholds <- c(-Inf,Inf) }
+  }
+  if( method %in% c("mdlp","interval","frequency","cluster") ) { 
+    A$newlevel <- paste("new",pmin(pmax(sapply(A$y,function(x)sum(x>=thresholds)),1),length(thresholds)-1),sep="")
+    MERGED <- merge(DATA,A,by="x")
+  }
+  MERGED <- MERGED[order(MERGED$rownumber),]
+  return(factor(MERGED$newlevel))
+  }
+  
+  
+  
+  
+  
+}
+```
+
+
+```{r}
+
+
+##突然发现问题，这种proposal level 是hold out data 也要在里面吗？
+
+
+Final$`Drug Group Description.x`
+Final$LTOT
+Final1<-Final
+Final<-Final1
+
+
+newFinal1<-newFinal
+newFinal<-newFinal1
+
+names(newFinal)[2]
+newFinal$LTOT<-factor(newFinal$LTOT)
+
+
+library(regclass)
+mosaic(LTOT ~`Drug Group Description`,data=newFinal,equal=TRUE,inside=TRUE,magnification=0.2)
+
+newlevels <- propose_levelsS19(newFinal[,c("Drug Group Description","LTOT")],method="tree",threshold=10, newname="Other",target=55,train.rows=which(!is.na(newFinal$LTOT)))
+
+length(newlevels)
+
+mosaic(newFinal$LTOT ~ newlevels,equal=TRUE,inside=TRUE)
+
+##So what levels got combined?  Run the 3 lines to find out
+
+TR <- table(newFinal$`Drug Group Description`,newlevels)
+
+OldToNew <- data.frame(NewLevel=unlist( apply(TR,1,function(x)names(which(x>0))) ) )
+NewToOld <- list(); for (i in levels(OldToNew$NewLevel) ) { NewToOld[[i]] <- rownames(subset(OldToNew,NewLevel==i)) }
+OldToNew
+NewToOld
+
+
+
+
+newFinal$`Drug Group Description`<- newlevels
+#newFinal$LTOT<-as.numeric(newFinal$LTOT)
+
+
+
+levels(newFinal$`Drug Group Description`) <- gsub("-","",levels(newFinal$`Drug Group Description`))
+AGG <-aggregate(LTOT~`Drug Group Description`,FUN = mean,data = newFinal)
+AOV <- aov(LTOT~`Drug Group Description.x`,data=Final)  #naive comparison of proportions
+summary(AOV)
+
+
+#TUKEY <- TukeyHSD(AOV)
+#multcompLetters4(AOV,TUKEY) 
+#?TukeyHSD()
+
+```
+
+```{r}
+mosaic(LTOT ~Specialty,data=newFinal,equal=TRUE,inside=TRUE,magnification=0.2)
+
+newlevels <- propose_levelsS19(newFinal[,c("Specialty","LTOT")],method="tree",threshold=10, newname="Other",target=50,train.rows=which(!is.na(newFinal$LTOT)))
+
+length(newlevels)
+
+mosaic(newFinal$LTOT ~ newlevels,equal=TRUE,inside=TRUE)
+
+##So what levels got combined?  Run the 3 lines to find out
+
+TR <- table(newFinal$Specialty,newlevels)
+
+OldToNew <- data.frame(NewLevel=unlist( apply(TR,1,function(x)names(which(x>0))) ) )
+NewToOld <- list(); for (i in levels(OldToNew$NewLevel) ) { NewToOld[[i]] <- rownames(subset(OldToNew,NewLevel==i)) }
+OldToNew
+NewToOld
+
+newFinal$Specialty<-newlevels
+```
+
+
+
+```{r}
+
+
+
+
+
+```
+```{r}
+install.packages("caret")
+library(caret)
+library(pROC)
+
+names(newFinal)<-make.names(names(newFinal)) 
+                                           #column 的名字里面不能有空格，要不然random forest 会显示object not found  
+                                          #Error in eval(predvars, data, env) : object 'Drug Group Description' not found
+
+findholdout<-newFinal[is.na(newFinal$LTOT),]
+TRAIN<-newFinal[!is.na(newFinal$LTOT),]
+TRAINrow<-sample(1:nrow(TRAIN),0.7*nrow(TRAIN))
+TRAINN<-TRAIN[TRAINrow, ]
+hoood<-TRAIN[-TRAINrow,]
+
+
+
+write.csv(TRAIN, "Clean_Data_with_new_variables.csv",row.names = FALSE)
+
+
+
+RF <- randomForest(LTOT~.-id, data=TRAINN)
+summarize_tree(RF)$imp
+predictions<-predict(RF,newdata=hoood,type='prob',)
+RESULT<-predictions[,2]
+roc(hoood$LTOT,RESULT) #82%
+
+summarize_tree(RF)$imp
+
+
+RF <- randomForest(LTOT~.-id, data=TRAIN)
+predictions<-predict(RF,newdata=findholdout,type='prob')[ ,2]
+
+rank1<-rank(-predictions,ties.method = "min")                      #### 改变rank的方法
+submission<-data.frame(id=findholdout$id,score=predictions,rank=rank1)
+
+write.csv(submission,"prediction1.csv",row.names = FALSE)
+
+
+visualize_relationship(RF,interest = "Specialty",on=TRAINN)
+library(regclass)
+
+
+
+
+
+
+
+
+
+```
+
+
+
+
+```{r}
+library(parallel)
+library(doParallel)
+
+install.packages("caret")
+library(lattice)
+library(ggplot2)
+library(caret)
+
+
+
+seed <- 474;
+set.seed(seed);
+fitControl <- trainControl(method="cv",number=5)
+gbmGrid <- expand.grid(n.trees=c(100,500),interaction.depth=c(1,3,5),shrinkage=c(.01,.1),n.minobsinnode=c(5,10))
+set.seed(seed);
+GBM <- train(LTOT~.-id, data=TRAIN,method='gbm',tuneGrid=gbmGrid,trControl=fitControl,verbose=FALSE)
+p.gbm <- predict(GBM,newdata=NEW,type="prob")
+plot(x2~x1,data=NEW,col=ifelse(p.gbm$Red>=.5,"red","blue"))
+```
+
+
+
+

@@ -1,0 +1,320 @@
+---
+title: "competition"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#HMAHCC_COMP<-read.csv("HMAHCC_COMP.csv",header=TRUE)
+
+save(HMAHCC_COMP,file="HMAHCC_COMP.RData")
+load("HMAHCC_COMP.RData")
+
+
+
+summary(HMAHCC_COMP)
+summary(newFinal)
+```
+
+## R Markdown
+
+```{r cars}
+#class(HMAHCC_COMP$Days)
+#hist(HMAHCC_COMP$Days,data=HMAHCC_COMP) ## The distrubution looks normal without do anything. 
+```
+
+
+
+
+```{r pressure, echo=FALSE}
+### create data EventDescription == "RX Claim - Paid" only
+EventDescriptionRxPaidonly<- HMAHCC_COMP[HMAHCC_COMP$event_descr == "RX Claim - Paid",]
+##有没有人没有RX claim 然后被丢掉了？
+## delete event_attr2 because this column is empty
+EventDescriptionRxPaidonly<-EventDescriptionRxPaidonly[,-c(which(names(EventDescriptionRxPaidonly)=="event_attr2"),which(names(EventDescriptionRxPaidonly)=="event_attr7"))]
+
+names(EventDescriptionRxPaidonly)<-c("id",
+"event_descr",
+"GPI Drug Class Description",
+"Rx Cost",
+"Net Paid Amount",
+"Brand Name",
+"Drug Group Description",
+"Generic Name",
+"Member Responsible Amount",
+"GPI Drug Group8 ID",
+"Days",
+"PAY_DAY_SUPPLY_CNT",
+"PAYABLE_QTY",
+"MME",
+"DRUG_TYPE",
+"Specialty",
+"Specialty2",
+"Specialty3")
+### remove the att 2 and att 7, becasue those are empty 
+ 
+                                                               
+EventDescriptionRxPaidonlywithOPIOIDonly<-sqldf("select * from EventDescriptionRxPaidonly where `GPI Drug Class Description` like  'OPIOID%'" )                        
+write.csv(EventDescriptionRxPaidonlywithOPIOIDonly,"EventDescriptionRxPaidonlywithOPIOIDonly.csv")              
+#Get the data that GPI include OPIOID. 
+
+
+```
+#test<-HMAHCC_COMP[HMAHCC_COMP$event_descr == "RX Claim - Paid" | HMAHCC_COMP$event_descr =="RX Claim - New Drug",]
+#HMAHCC_COMP$id
+The data we have only with RX Claim - Paid and wthout event_attr2
+The column name hase been renamed base on the dictionary provided by case
+EventDescriptionRxPaidonlywithOPIOIDonly data with RxPaid and OPIOId only
+
+
+```{r}
+!is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT)
+EventDescriptionRxPaidonly[!is.na(EventDescriptionRxPaidonly$MME),] #41,234 rows
+EventDescriptionRxPaidonly[!is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT),] #41,443 rows 
+EventDescriptionRxPaidonly[is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT),] #426,847 rows 
+
+EventDescriptionRxPaidonly[c(which(!is.na(EventDescriptionRxPaidonly$MME) & is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT))),]         #0 rows 
+
+EventDescriptionRxPaidonly[c(which(is.na(EventDescriptionRxPaidonly$MME) & !is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT))),]          # 209 rows
+#这里面有些人mme 是nA。但是看起来很像ＬＴＯＴ患者该不该丢掉这些，但是又想到MME是na会不会最后把这些都给丢掉了，清理data的时候是不是都给清掉了？
+
+
+
+
+```
+Based on the 
+#EventDescriptionRxPaidonly[!is.na(EventDescriptionRxPaidonly$MME),] #41,234 rows
+#EventDescriptionRxPaidonly[!is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT),] #41,443 rows
+#EventDescriptionRxPaidonly[c(which(is.na(EventDescriptionRxPaidonly$MME) & #!is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT))),]          # 209 rows
+shows that some row has pay_Day_sypply_cnt do not have MME. 
+
+Based on the Q&A session, only RX-claim with MME can be requalify and used to determine LTOT.
+
+```{r}
+test<-EventDescriptionRxPaidonly[!is.na(EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT),]
+sort(table(test$`GPI Drug Class Description`),decreasing = TRUE)
+
+length(unique(EventDescriptionRxPaidonlywithOPIOIDonly$id[EventDescriptionRxPaidonlywithOPIOIDonly$Days>=0&EventDescriptionRxPaidonlywithOPIOIDonly$Days <=180 ]  ))
+
+
+## 2403 row 
+# 还要有opioid 
+## 如果不提前用days，那么会有2408rows 
+## 找出来是哪几个id？之后直接在那个ltot后面写0
+
+
+
+daysbetween0and180<-EventDescriptionRxPaidonlywithOPIOIDonly[EventDescriptionRxPaidonlywithOPIOIDonly$Days>=0&EventDescriptionRxPaidonlywithOPIOIDonly$Days <=180, ]
+
+uniqueid<-unique(EventDescriptionRxPaidonlywithOPIOIDonly$id[EventDescriptionRxPaidonlywithOPIOIDonly$Days>=0&EventDescriptionRxPaidonlywithOPIOIDonly$Days <=180 ]  )
+length(uniqueid)
+# get the unique id total row is 2403
+#if i %in% c("OPIOID COMBINATIONS","OPIOID AGONISTS ","OPIOID PARTIAL AGONISTS ","OPIOID ANTAGONISTS ")
+#define LTOT
+#$EventDescriptionRxPaidonly[EventDescriptionRxPaidonly$`GPI Drug Class Description` %in% c("OPIOID #COMBINATIONS","OPIOID AGONISTS ","OPIOID PARTIAL AGONISTS ","OPIOID ANTAGONISTS ")]
+#EventDescriptionRxPaidonly$PAY_DAY_SUPPLY_CNT[EventDescriptionRxPaidonly$`GPI Drug Class Description` %in% c("OPIOID #COMBINATIONS","OPIOID AGONISTS ","OPIOID PARTIAL AGONISTS ","OPIOID ANTAGONISTS ")]
+
+
+install.packages('sqldf')
+library('sqldf')
+mid<-sqldf("select id,days,max(PAY_DAY_SUPPLY_CNT) from daysbetween0and180 group by id,Days")
+#因为有些数据有同一天给两种opiod 药，所以要用max选出吃的做长时间的药的时间
+
+daysbetween0and180[daysbetween0and180$id=='ID10024447278',]
+
+
+
+Totaldays<-c()
+for(i in 1:length(uniqueid)){
+    Totaldays[i]<-sum(mid[mid$id==uniqueid[i],]$`max(PAY_DAY_SUPPLY_CNT)`,na.rm = TRUE)
+}
+df<-data.frame(uniqueid,Totaldays)
+
+
+
+#length(unique(mid[is.na(mid$`max(PAY_DAY_SUPPLY_CNT)`),]$id)) #确实有47个里面max是NA，但是考虑到那个里数据里面包含opioid combinaton还有其他没有mme的，就先忽略吧
+
+mid$`max(PAY_DAY_SUPPLY_CNT)`
+
+LTOT<-c()
+for(i in 1:length(df$Totaldays)){
+  if(df$Totaldays[i]>=162){
+     LTOT[i]=1
+  }else{
+    LTOT[i]=0
+  }
+}
+
+df$LTOT<-LTOT
+
+sqldf("")
+
+merge1<-merge(EventDescriptionRxPaidonly,df,by.x = 'id',by.y = 'uniqueid')
+
+write.csv(merge1,"withLTOT.csv",row.names = FALSE)
+
+
+
+```
+
+
+
+```{r}
+hist（log(EventDescriptionRxPaidonly$MME))
+#Histogram skews to the right
+
+hist（EventDescriptionRxPaidonly$MME)
+#now is much better
+
+
+
+```
+
+
+
+
+
+```{r}
+
+names(EventDescriptionRxPaidonly)
+EventDescriptionRxPaidonly[EventDescriptionRxPaidonly$`GPI Drug Class Description` == "OPIOID AGONISTS", ]
+
+sort(table(EventDescriptionRxPaidonly$`GPI Drug Class Description`),decreasing = TRUE)[1:300]
+levels(EventDescriptionRxPaidonly$`GPI Drug Class Description`)
+
+
+EventDescriptionRxPaidonly[is.na(EventDescriptionRxPaidonly$`GPI Drug Class Description`),]
+
+
+```
+
+```{r}
+## used for analysis 
+number_of_OPIOID_of_each_id_before_day_1<-sqldf("select id, count(*) as number_of_OPIOID from EventDescriptionRxPaidonly where `GPI Drug Class Description` like  'OPIOID%' and Days<=0 group by id ")
+#现在只用day 1 之前的。 
+
+sqldf("select id, days,`Drug Group Description`, count(*) from EventDescriptionRxPaidonly where Days<=0 group by id, days,`Drug Group Description`" )
+#在day0 之前，每个人有多少个drug group description,在每一天里
+sqldf("select id,`Drug Group Description`, count(*) from EventDescriptionRxPaidonly where Days<=0 group by id,`Drug Group Description`")
+
+count_Drug_group_max<-sqldf("select id,`Drug Group Description`, count(*)as cnt from EventDescriptionRxPaidonly where Days<=0 group by id,`Drug Group Description` order by id, count(*) desc")
+#same as last, by the count(*) was 排序了
+
+
+top1_drug_group_of_each_id<-sqldf(" select A.id,`Drug Group Description` from count_Drug_group_max B join (select id,max(cnt) as max_count from count_Drug_group_max group by id) as A on B.id=A.id and cnt= max_count")
+
+
+sort(table(top1_drug_group_of_each_id$`Drug Group Description`),decreasing = TRUE)
+#select top 1 drug gescription
+#里面有个问题，里面的null有314个
+sqldf("select * from top1_drug_group_of_each_id where `Drug Group Description` == 'NULL'  ")
+#看下哪些id里面null的数量很多
+
+sqldf("select id,`Drug Group Description`, count(*)as cnt from EventDescriptionRxPaidonly where Days<=0 and id in(select id from top1_drug_group_of_each_id where `Drug Group Description` == 'NULL' ) group by id,`Drug Group Description` order by id, count(*) desc")
+#这个展示了，每个null最多的的id的样子
+#我在想先把null先放在这里，如果NUll真的是非常影响，感觉可能是在输入信息的时候，front end 没有那个选项，所以他们选择NULL
+
+
+
+#在days 0 之前，每个人收到的每个drug group description 每种有多少个
+number_of_Pain_before_day_1<-sqldf("select id,`Drug Group Description`, count(*) as count_of_pain from EventDescriptionRxPaidonly where Days<=0 and `Drug Group Description`='PAIN' group by id,`Drug Group Description`" )
+#在day0之前，每个人收到的pain 的数量是多少
+
+sort(table(EventDescriptionRxPaidonly$`Drug Group Description`), decreasing = TRUE) 
+#里面有个问题，里面的null有314个
+
+
+
+
+Average_MME<-sqldf("select id,avg(MME) as average_MME from EventDescriptionRxPaidonly  where  Days<=0 and MME is not NULL group by id")
+#找出平均MME的量
+
+
+#################
+A<-sqldf("select id, count(*) as number_of_IR  from EventDescriptionRxPaidonly where Days<=0 and DRUG_TYPE='IR' group by id, DRUG_TYPE")
+#number of IR of each id
+B<-sqldf("select id, count(*) as number_of_ER   from EventDescriptionRxPaidonly where Days<=0 and DRUG_TYPE='ER' group by id, DRUG_TYPE")
+#number of ER of each id
+
+E<-sqldf("select A.id,number_of_IR, number_of_ER  from A left join B on A.id=b.id")
+E$number_of_ER[is.na(E$number_of_ER)]<-0
+
+number_of_IR_ER<-E
+#找出每个id的IR 和ER 各是多少
+##################################
+ 
+sqldf("select id,Specialty,count(*) as count_of_specialty from EventDescriptionRxPaidonly where Days<=0 and `GPI Drug Class Description` like  'OPIOID%' group by id, Specialty")
+
+C<-sqldf("select id,Specialty,count(*) as count_of_specialty from EventDescriptionRxPaidonly where Days<=0 and `GPI Drug Class Description` like  'OPIOID%' group by id, Specialty order by id,count_of_specialty desc ")
+#加上了order by
+
+D<-sqldf("select id,Specialty,max(count_of_specialty) from C group by id")
+Top1_of_Specialty<-sqldf("select id,Specialty from D")
+
+#选出当涉及到opioid的时候，speciality里面哪个是top1
+
+
+
+
+```
+
+
+```{r}
+df
+nrow(df) #2403
+##################################
+number_of_OPIOID_of_each_id_before_day_1
+nrow(number_of_OPIOID_of_each_id_before_day_1) #2403
+hist(log(number_of_OPIOID_of_each_id$number_of_OPIOID)) ##没什么用比以前好多了
+number_of_OPIOID_of_each_id_before_day_1$log_of_number_of_OPIOID <-log(number_of_OPIOID_of_each_id$number_of_OPIOID)
+##################################
+top1_drug_group_of_each_id
+nrow(top1_drug_group_of_each_id) #2591
+#################################
+
+number_of_Pain_before_day_1
+nrow(number_of_Pain_before_day_1) #2403
+hist（log(number_of_Pain_before_day_1$count_of_pain))#比以前好多了
+number_of_Pain_before_day_1$log_of_count_of_pain<-log(number_of_Pain_before_day_1$count_of_pain)
+###################################
+Average_MME #应该要用log
+nrow(Average_MME) #2390
+Average_MME$log_of_average_MME<-log(Average_MME$average_MME)
+###################################
+
+number_of_IR_ER
+log_of_number_of_ER
+log_of_number_of_IR
+#number_of_IR_ER$log_of_number_of_ER<-log(number_of_IR_ER$number_of_ER)
+number_of_IR_ER$log_of_number_of_IR<-log(number_of_IR_ER$number_of_IR)
+nrow(number_of_IR_ER) #2380
+###################################
+Top1_of_Specialty 
+nrow(Top1_of_Specialty) #2403
+#######################################
+######################################
+df
+number_of_OPIOID_of_each_id_before_day_1
+top1_drug_group_of_each_id
+number_of_Pain_before_day_1
+Average_MME
+number_of_IR_ER
+Top1_of_Specialty 
+
+F<-merge(df,number_of_OPIOID_of_each_id_before_day_1,by.x = 'uniqueid',by.y = 'id')
+G<-merge(top1_drug_group_of_each_id,number_of_Pain_before_day_1,by.x = 'id',by.y = 'id')
+H<-merge(Average_MME,number_of_IR_ER,by.x = 'id',by.y = 'id')
+AA<-merge(G,F,by.x ='id' ,by.y = 'uniqueid' )
+BB<-merge(H,Top1_of_Specialty,by.x = 'id',by.y = 'id')
+Final<-merge(AA,BB,by.x = 'id',by.y = 'id')
+names(Final)
+Final<-Final[,c(-3,-6)]
+Final<-Final[,-12] #remove log of number of ER
+write.csv(Final,"Clean Data.csv",row.names = FALSE)
+names(Final)[2]<-"Drug Group Description"
+
+Final$LTOT<-factor(Final$LTOT) ## change LTOT to factor
+
+```
+
+
+
